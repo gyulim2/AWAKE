@@ -1,0 +1,13 @@
+# 실행에 필요한 패키지. 모델(models/pdf_model.joblib)은 아래 scikit-learn·imbalanced-learn
+# 버전으로 저장됐으므로 두 패키지는 버전을 고정한다 (바꾸면 training/train_pdf.py로 재학습).
+scikit-learn==1.9.1
+imbalanced-learn==0.14.2
+pandas>=2.2
+numpy>=2.0
+joblib>=1.4
+PyMuPDF>=1.24
+pdfplumber>=0.11
+python-docx>=1.1
+beautifulsoup4>=4.12
+olefile>=0.47
+openai>=1.40
