@@ -1,6 +1,6 @@
 # 02. 아키텍처 설계
 
-## 1. 전체 구조
+## 1. 시스템 구성
 
 ```mermaid
 flowchart LR
@@ -24,23 +24,20 @@ flowchart LR
     GUI -.->|결과 목록 조회| JSON
 ```
 
-## 2. 구성 요소
-
-| 구성 요소 | 언어 | 책임 | 의존 |
+| 구성 요소 | 언어 | 프로세스 | 책임 |
 |---|---|---|---|
-| `awake_monitor` | C | 수신 폴더 감시, 새 메일마다 파이프라인 실행, 순차 처리 | Linux inotify |
-| `awake_gui` | C | 감시기 실행/중지, 감시기 출력 표시, 결과 JSON 목록 표시 | GTK 3 |
-| `awake.pipeline` | Python | 메일 1통 분석 → 판정 통합 → 이동·기록 | 아래 모듈 전부 |
-| `awake.mailparse` | Python | MIME 파싱, 링크 추출, 첨부 본문 텍스트 추출 | email, BeautifulSoup, pdfplumber, python-docx, olefile |
-| `awake.pdf_features` | Python | PDF 피처 추출 (**학습과 추론이 공유**) | PyMuPDF, pdfid |
-| `awake.attachments` | Python | 첨부 확장자별로 엔진 선택, PDF 모델 로드·예측 | scikit-learn, imbalanced-learn |
-| `awake.docx_rules` | Python | OOXML 정적 규칙 검사 | zipfile (표준 라이브러리) |
-| `awake.llm` | Python | 프롬프트 구성, LLM 호출, 판정 파싱 | openai |
-| `training/train_pdf.py` | Python | PDF 모델 학습·평가, 모델 카드 생성 | scikit-learn, imbalanced-learn |
+| `awake_monitor` | C11 | 상주 | inotify 이벤트 수신, 메일 단위 파이프라인 실행, 순차 처리 |
+| `awake_gui` | C11, GTK 3 | 상주 (선택) | 감시기 생명주기 관리, 출력 스트림 표시, 결과 조회 |
+| `awake.pipeline` | Python | 메일당 1회 | 파싱, 엔진 호출, 판정 통합, 파일 이동, 결과 기록 |
+| `awake.mailparse` | Python | 라이브러리 | MIME 트리 순회, 본문·첨부·URL 추출, 첨부 텍스트 추출 |
+| `awake.pdf_features` | Python | 라이브러리 | PDF 피처 추출 (학습·추론 공용) |
+| `awake.attachments` | Python | 라이브러리 | 확장자 기반 엔진 분기, 모델 로드(프로세스 내 캐시) |
+| `awake.docx_rules` | Python | 라이브러리 | OOXML 패키지 정적 검사 |
+| `awake.llm` | Python | 라이브러리 | 프롬프트 구성, API 호출, 판정 파싱 |
 
-C와 Python을 나눈 이유는 [04-decisions.md](04-decisions.md)의 ADR-03에 적었다.
+## 2. 프로세스 모델
 
-## 3. 메일 한 통의 처리 순서
+### 2.1 메일 처리 시퀀스
 
 ```mermaid
 sequenceDiagram
@@ -66,21 +63,86 @@ sequenceDiagram
     P-->>MON: 종료 코드 (0이 아니면 메일을 그대로 둠)
 ```
 
-## 4. 판정 로직
+### 2.2 이벤트 감지
 
-각 엔진은 `verdict`를 `1`(악성), `0`(정상), `None`(판정 불가: 오류·미지원·생략) 중 하나로 낸다. 최종 판정은 **하나라도 1이면 악성**이고, `None`은 판정에서 빠지되 이유가 결과 JSON에 남는다.
-
-| 엔진 | 악성 조건 | 판정 불가가 되는 경우 |
+| 항목 | 설정 | 근거 |
 |---|---|---|
-| PDF 모델 | 악성 확률 ≥ 0.5 | PDF가 아님, pdfid 분석 실패 |
-| DOCX 규칙 | HIGH 등급 항목이 1개 이상 | (항상 판정함. MEDIUM만 있으면 0) |
-| LLM | 응답 마지막 줄이 `VERDICT: MALICIOUS` | 첨부·링크 없음, API 키 없음, 호출 실패, 형식 위반 |
+| 감시 마스크 | `IN_CLOSE_WRITE \| IN_MOVED_TO` | `IN_CREATE`는 기록 완료 전에 발생해 부분 파일을 읽을 수 있음. Maildir 배달은 `rename(2)`이므로 `IN_MOVED_TO`로 완결된 파일만 수신 |
+| 디스크립터 | `inotify_init1(IN_CLOEXEC)` | 자식 프로세스로 inotify fd 누수 방지 |
+| 버퍼 | `64 × (sizeof(struct inotify_event) + NAME_MAX + 1)` | 1회 `read(2)`로 최대 64개 이벤트 수용 |
+| 필터 | `.` 시작 이름, `/` 포함 이름, `IN_ISDIR`, 비정규 파일(`lstat` 기준) 제외 | 임시 파일·심볼릭 링크 경유 접근 차단 |
+| 시그널 | `SIGTERM`, `SIGINT` 핸들러(`SA_RESTART` 미설정) | 블로킹 `read(2)`가 `EINTR`로 반환되어 종료 플래그 확인 |
 
-"하나라도 악성이면 격리"는 놓치는 것(미탐)보다 잘못 격리하는 것(오탐)이 덜 위험하다는 판단이다. 격리된 메일은 지워지지 않고 `mal/`에 남으므로 사용자가 꺼낼 수 있다.
+### 2.3 실행 및 동시성
 
-## 5. 데이터 형식
+- 감시기는 메일마다 `fork(2)` 후 `execvp(3)`로 `python -m awake.pipeline --deliver <경로>`를 실행하고 `waitpid(2)`로 완료를 기다린다. 셸을 거치지 않으므로 파일명은 argv 원소로만 전달된다.
+- 처리는 **직렬**이다. 처리 중 발생한 이벤트는 커널 inotify 큐에 적재되며 다음 `read(2)`에서 소비된다. 동일 파일에 대한 동시 처리가 구조적으로 발생하지 않는다.
+- 결과는 종료 코드로만 전달된다. `0`이 아니면 감시기는 메일을 이동하지 않고 로그만 남긴다.
 
-판정 결과 JSON (`awake-results/<메일 파일명>.json`). 외부 템플릿 인젝션을 넣은 테스트 메일을 감시기로 처리했을 때의 실제 출력이다.
+### 2.4 파일 시스템 연산
+
+| 연산 | 방식 | 목적 |
+|---|---|---|
+| 메일 이동 | `shutil.move` (동일 파일 시스템에서 `rename(2)`) | 원자적 이동 |
+| 경고 메일 생성 | `awake-results/.<uuid>.tmp`에 기록 후 `os.replace`로 `new/` 이동 | 부분 기록된 메일이 MUA에 노출되지 않도록 함 |
+| 경고 메일 파일명 | `<epoch>.<uuid4>.<hostname>` | Maildir 고유 이름 규칙 |
+| 첨부 분석 | `tempfile.mkstemp(prefix="awake-")` 후 즉시 삭제 | 공격자가 지정한 원본 파일명을 경로로 사용하지 않음 |
+
+## 3. 인터페이스 명세
+
+### 3.1 CLI
+
+```
+python -m awake.pipeline [--deliver] [--no-llm] <mail>
+```
+
+| 옵션 | 동작 |
+|---|---|
+| (없음) | 분석 결과 JSON을 stdout으로 출력. 파일 시스템 변경 없음 |
+| `--deliver` | 결과 JSON 저장, 판정에 따라 메일 이동, 격리 시 경고 메일 생성 |
+| `--no-llm` | LLM 단계 생략 (`llm.status = "skipped"`) |
+
+| 종료 코드 | 의미 |
+|---|---|
+| `0` | 분석 완료 |
+| `1` | 처리되지 않은 예외 (Python 기본) |
+| `2` | 인자로 받은 경로가 정규 파일이 아님 |
+
+```
+awake_monitor <watch_dir>
+awake_gui <watch_dir> <result_dir>
+```
+
+### 3.2 환경변수
+
+| 변수 | 기본값 | 용도 |
+|---|---|---|
+| `AWAKE_MAILDIR` | `~/Maildir` | Maildir 루트. 하위 `A-Awake/`, `new/`, `mal/`, `awake-results/` 사용 |
+| `AWAKE_MODEL_DIR` | `<repo>/models` | PDF 모델 위치 |
+| `AWAKE_LLM_MODEL` | `gpt-4o-mini` | LLM 모델명 |
+| `OPENAI_API_KEY` | (없음) | 미설정 시 LLM 단계 생략 |
+| `AWAKE_PYTHON` | `python3` | 감시기가 실행할 인터프리터 |
+| `PYTHONPATH` | `scripts/env.sh`가 `<repo>/src` 설정 | `awake` 패키지 경로 |
+
+### 3.3 결과 스키마 (`awake-results/<메일명>.json`)
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `subject`, `from` | string | 디코딩된 헤더 값 |
+| `links` | string[] | 중복 제거된 URL, 출현 순서 유지 |
+| `attachments[]` | object[] | 첨부별 분석 결과 (아래) |
+| `attachments[].engine` | `"pdf_ml"` \| `"docx_rules"` \| null | 적용 엔진 |
+| `attachments[].status` | `"ok"` \| `"error"` \| `"unsupported"` | 분석 상태 |
+| `attachments[].verdict` | 1 \| 0 \| null | 엔진 판정 |
+| `attachments[].malicious_probability` | number | PDF 전용, 0~1 |
+| `attachments[].features` | object | PDF 전용, 28개 피처 값 |
+| `attachments[].findings[]` | `{level, rule, detail}` | DOCX 전용 |
+| `llm` | `{status, verdict, analysis}` | `status`: `ok` \| `skipped` \| `error` |
+| `final_decision` | `"malicious"` \| `"normal"` | 최종 판정 |
+| `reasons` | string[] | 악성 판정 근거 요약 |
+| `email_file` | string | Maildir 파일명 |
+
+실제 출력 예 (외부 템플릿 인젝션 DOCX 첨부 메일, `llm` 생략):
 
 ```json
 {
@@ -101,17 +163,48 @@ sequenceDiagram
 }
 ```
 
-## 6. 폴더 구조
+## 4. 판정 통합
+
+엔진 판정 집합을 $V = \{v_i\}$, $v_i \in \{1, 0, \text{None}\}$이라 할 때 최종 판정은 $\exists v_i = 1$이면 악성이다. `None`은 집계에서 제외하고 사유를 결과에 남긴다.
+
+| 엔진 | 악성 조건 | `None` 조건 |
+|---|---|---|
+| PDF 모델 | $P(\text{malicious}) \ge 0.5$ | PyMuPDF 열기 실패, pdfid `IsPDF ≠ True` |
+| DOCX 규칙 | HIGH 등급 탐지 ≥ 1 | 없음 (항상 판정) |
+| LLM | 응답 최종 행이 `VERDICT: MALICIOUS` | 첨부·링크 없음, API 키 없음, 호출 예외, 최종 행 형식 불일치 |
+
+논리합 정책은 미탐 비용이 오탐 비용보다 크다는 전제를 따른다. 격리는 삭제가 아니므로 복구 가능하다. 정책 근거는 [05-decisions.md](05-decisions.md) ADR-06.
+
+## 5. 오류 처리
+
+| 상황 | 처리 | 메일 상태 |
+|---|---|---|
+| 메일 크기 > 30 MiB | 분석 생략, `malicious`로 격리 | `mal/` |
+| PDF 파싱 실패 | 해당 첨부 `status: error`, 나머지 계속 | 다른 엔진 판정에 따름 |
+| 지원하지 않는 첨부 형식 | `status: unsupported` | 다른 엔진 판정에 따름 |
+| LLM 호출 예외 | `llm.status: error`, 예외 클래스명만 기록 | 다른 엔진 판정에 따름 |
+| 모델 피처 목록 불일치 | `RuntimeError`로 파이프라인 중단 | 이동하지 않음 |
+| 파이프라인 비정상 종료 | 감시기가 stderr에 기록 | 수신 폴더에 유지 |
+| 감시 중 파일이 사라짐 | `lstat` 실패 시 무시 | 해당 없음 |
+
+## 6. 저장소 구조
 
 ```
 src/
   monitor/awake_monitor.c     감시기
   gui/awake_gui.c             GUI
-  awake/                      분석 패키지 (pipeline, mailparse, pdf_features, attachments, docx_rules, llm, config)
-  awake/vendor/pdfid.py       Didier Stevens의 pdfid (퍼블릭 도메인)
-models/                       학습된 PDF 모델 + 모델 카드
-training/                     학습 스크립트, 데이터, 당시 노트북(기록용)
-tests/                        pytest 테스트, 샘플 PDF·DOCX
-scripts/                      실행 스크립트 (환경변수 설정 포함)
-docs/                         이 문서들
+  awake/                      분석 패키지
+    pipeline.py               진입점, 판정 통합, 파일 이동
+    mailparse.py              MIME 파싱, 텍스트 추출
+    pdf_features.py           PDF 피처 추출 (학습·추론 공용)
+    attachments.py            엔진 분기, 모델 로드
+    docx_rules.py             OOXML 규칙 검사
+    llm.py                    LLM 분석
+    config.py                 경로·상한값
+    vendor/pdfid.py           pdfid 0.2.8 (Didier Stevens, 퍼블릭 도메인)
+models/                       pdf_model.joblib, pdf_model_card.json
+training/                     train_pdf.py, data/, notebooks_legacy/
+tests/                        pytest, fixtures/
+scripts/                      env.sh, run_monitor.sh, run_gui.sh
+.github/workflows/ci.yml      CI
 ```
