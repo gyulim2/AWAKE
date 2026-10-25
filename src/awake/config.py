@@ -3,7 +3,7 @@
   AWAKE_MAILDIR      Maildir 루트                       (기본: ~/Maildir)
   AWAKE_MODEL_DIR    학습된 모델 폴더                    (기본: 저장소의 models/)
   AWAKE_LLM_MODEL    사용할 OpenAI 모델명                (기본: gpt-4o-mini)
-  OPENAI_API_KEY     OpenAI API 키 (코드·저장소에 절대 넣지 말 것). 없으면 LLM 단계는 건너뛴다.
+  OPENAI_API_KEY     OpenAI API 키 (코드·저장소에 절대 넣지 말 것). 없으면 LLM 문맥 설명을 건너뛴다.
 """
 import os
 from pathlib import Path
@@ -24,3 +24,4 @@ LLM_MODEL = os.environ.get("AWAKE_LLM_MODEL", "gpt-4o-mini")
 # LLM에 보내는 텍스트 길이 상한 (비용·프롬프트 인젝션 표면 축소)
 LLM_MAX_BODY_CHARS = 4000
 LLM_MAX_ATTACHMENT_CHARS = 1000
+LLM_MAX_LINKS = 30
