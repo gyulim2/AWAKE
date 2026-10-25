@@ -1,0 +1,117 @@
+{
+  "model": "RandomForest (imblearn Pipeline: VarianceThreshold → SMOTE → RandomForest)",
+  "trained_on": "2026-10-25",
+  "sklearn_version": "1.9.1",
+  "data": {
+    "raw_benign": 103,
+    "raw_malicious": 298,
+    "dropped_conflicting_hash": 1,
+    "dropped_unparsed": 1,
+    "used_benign": 102,
+    "used_malicious": 296
+  },
+  "features": [
+    "pdfsize",
+    "metadata size",
+    "pages",
+    "title characters",
+    "isEncrypted",
+    "embedded files",
+    "contains text",
+    "obj",
+    "endobj",
+    "stream",
+    "endstream",
+    "xref",
+    "trailer",
+    "startxref",
+    "/Page",
+    "/Encrypt",
+    "/ObjStm",
+    "/JS",
+    "/JavaScript",
+    "/AA",
+    "/OpenAction",
+    "/AcroForm",
+    "/JBIG2Decode",
+    "/RichMedia",
+    "/Launch",
+    "/EmbeddedFile",
+    "/XFA",
+    "/Colors"
+  ],
+  "evaluation": "RepeatedStratifiedKFold(5 folds × 5 repeats), SMOTE는 학습 fold에만 적용",
+  "metrics": {
+    "accuracy": {
+      "mean": 0.8176,
+      "std": 0.0498
+    },
+    "balanced_accuracy": {
+      "mean": 0.7447,
+      "std": 0.0614
+    },
+    "precision_malicious": {
+      "mean": 0.8657,
+      "std": 0.031
+    },
+    "recall_malicious": {
+      "mean": 0.8939,
+      "std": 0.0514
+    },
+    "f1_malicious": {
+      "mean": 0.8789,
+      "std": 0.0345
+    },
+    "roc_auc": {
+      "mean": 0.8461,
+      "std": 0.0471
+    }
+  },
+  "top_features": [
+    [
+      "pdfsize",
+      0.1355
+    ],
+    [
+      "pages",
+      0.0927
+    ],
+    [
+      "/Page",
+      0.0878
+    ],
+    [
+      "endobj",
+      0.0852
+    ],
+    [
+      "endstream",
+      0.0842
+    ],
+    [
+      "stream",
+      0.0802
+    ],
+    [
+      "obj",
+      0.0771
+    ],
+    [
+      "metadata size",
+      0.0732
+    ],
+    [
+      "trailer",
+      0.0586
+    ],
+    [
+      "xref",
+      0.0554
+    ]
+  ],
+  "caveats": [
+    "데이터가 작다(정상 PDF가 약 100개). 수치는 이 데이터셋 기준이며 실제 메일 환경 성능을 보장하지 않는다.",
+    "정상/악성 샘플의 출처가 달라 파일 크기 등 출처 특성을 학습했을 가능성이 있다.",
+    "학습 CSV는 2024년 PyMuPDF로 추출됐다. 'metadata size' 등은 라이브러리 버전에 따라 값이 조금 달라질 수 있다."
+  ]
+}

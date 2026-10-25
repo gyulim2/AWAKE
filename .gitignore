@@ -1,21 +1,16 @@
 # 가상환경 / 캐시
-ML_Model/
 .venv/
 venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
-# 빌드 산출물 / 로그 / 임시파일
-src/Backend/C_monitoring
-src/Backend/program
-src/Frontend/2tab_program
-src/Frontend/3tab_program
-src/Frontend/tab_program
-src/Frontend/test
+# C 빌드 산출물
+build/
+
+# 실행 중 생기는 파일
 *.log
-temp.*
-ML_LLM_result/
-src/monitor_test/
+awake-results/
 
 # 비밀값
 .env
